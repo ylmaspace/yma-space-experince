@@ -1,203 +1,294 @@
-import { PhysicsWorld, createBody, DragForce, clamp, distance } from "./physics-engine.js";
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YLMA Closed System</title>
+  <style>
+    :root { --bg:#070d19; --panel:#0f1a2f; --line:#22466e; --txt:#e4f3ff; --muted:#9ab4cf; --glow:#4dd8ff; }
+    *{box-sizing:border-box} body{margin:0;font-family:system-ui,sans-serif;background:radial-gradient(circle at top,#10234c 0%,var(--bg) 45%);color:var(--txt)}
+    .app{display:grid;grid-template-columns:240px 1fr;min-height:100vh}.side{padding:14px;border-right:1px solid var(--line);background:#091225}.main{padding:14px}
+    .btn{display:block;width:100%;margin-bottom:8px;padding:10px;border:1px solid var(--line);background:#133159;color:var(--txt);border-radius:8px;cursor:pointer;text-align:left}
+    .btn.active,.btn:hover{box-shadow:0 0 14px rgba(77,216,255,.32)} .section{display:none}.section.active{display:block}
+    .card{border:1px solid var(--line);background:rgba(15,26,47,.95);border-radius:12px;padding:12px;margin-bottom:10px}.grid{display:grid;grid-template-columns:1fr 370px;gap:10px}
+    .sim{border:1px solid var(--line);border-radius:8px;background:#031022;width:100%;height:auto}.hud{font-size:13px;color:var(--muted)}
+    input,select,textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #2f567f;background:#081226;color:var(--txt)}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.carousel{display:flex;gap:8px;overflow:hidden}.pill{padding:8px 10px;border:1px solid #2a5e86;border-radius:8px;min-width:150px;text-align:center;background:#0b1c34}
+    .pill.active{border-color:var(--glow);box-shadow:0 0 12px rgba(77,216,255,.35)} .log{max-height:170px;overflow:auto;background:#081224;padding:8px;border-radius:8px;border:1px solid #275078}
+    .flash{animation: flash 0.3s ease-out}@keyframes flash{0%{filter:brightness(2)}100%{filter:brightness(1)}}
+    @media(max-width:1100px){.app{grid-template-columns:1fr}.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <h2>YLMA</h2>
+      <button class="btn active" data-s="home">HOME</button>
+      <button class="btn" data-s="competition">COMPETICION</button>
+      <button class="btn" data-s="training">ENTRENAMIENTO</button>
+      <button class="btn" data-s="forum">FORO</button>
+      <button class="btn" data-s="store">TIENDA</button>
+      <button class="btn" data-s="group">GRUPO</button>
+      <div class="hud">XP: <span id="xp">0</span><br>NOVA: <span id="nova">0</span><br>Rank: <span id="rank">Cadete</span><br>Spec: <span id="specLabel">tecnico</span></div>
+    </aside>
 
-export const metadata = { name: "DOCKING PRECISION", type: "docking", baseDifficulty: 3 };
+    <main class="main">
+      <section id="home" class="section active">
+        <div class="card"><h1>YLMA Space Experience</h1><p>Simulación física competitiva con tensión, feedback y progresión real.</p></div>
+        <div class="card"><b>Noticias</b><div id="news" class="hud"></div></div>
+      </section>
 
-export function setup({ difficulty = 1, upgrades = {}, specialization = "tecnico" } = {}) {
-  const world = new PhysicsWorld({ gravity: { x: 0, y: 0 }, airDensity: 0.05 });
-  const station = createBody({ id: "station", static: true, x: 130, y: -20, mass: 9999 });
-  station.orbitAngle = 0;
-  const ship = createBody({ id: "ship", x: -240, y: 20, vx: 18, vy: 0, mass: 4, area: 1.2, dragCoeff: 0.3, inertia: 1.5 });
-  ship.forces.push(new DragForce(0.45));
-  ship.stability = 100;
-  ship.heat = 0;
-  ship.controlLoss = false;
-  ship.safeLimit = 4.4 + (upgrades.control || 1) * 0.25;
-  ship.controlBonus = specialization === "tecnico" ? 1.2 : specialization === "agresivo" ? 0.85 : 1;
+      <section id="competition" class="section">
+        <div class="card">
+          <h3>Matchmaking + Lobby (6)</h3>
+          <button id="startComp">Iniciar competición</button>
+          <div id="mm" class="hud">idle</div>
+          <div id="lobby" class="hud">-</div>
+          <div class="carousel" id="carousel"></div>
+        </div>
+        <div class="grid">
+          <div class="card"><canvas id="sim" class="sim" width="900" height="520"></canvas></div>
+          <div class="card" id="panelCard">
+            <h3 id="arenaTitle">Arena</h3>
+            <div id="arenaInstructions" class="hud"></div>
+            <div id="arenaStats" class="hud"></div>
+            <div class="row"><button id="thrustOn">THRUST</button><button id="thrustOff">OFF</button><button id="left">LEFT</button><button id="right">RIGHT</button></div>
+            <div class="row"><button id="up">UP</button><button id="down">DOWN</button><button id="runCode">RUN CODE</button></div>
+            <textarea id="codeInput" rows="6" placeholder="Solo para arena_code.js">return input + 1;</textarea>
+            <button id="finish">Finalizar y evaluar</button>
+            <div id="result" class="hud"></div>
+            <div id="eventBanner" class="hud"></div>
+          </div>
+        </div>
+      </section>
 
-  world.addBody(station);
-  world.addBody(ship);
-  return {
-    world, station, ship,
-    elapsed: 0,
-    challenge: null,
-    fuel: 100,
-    fuelUsage: 0.6 / (upgrades.fuelEfficiency || 1),
-    thrustBoost: upgrades.thrustPower || 1,
-    camera: { x: ship.x, y: ship.y, zoom: 1, shake: 0 },
-    particles: [],
-    history: [],
-    effect: { fail: 0, success: 0 },
-    event: null,
-    eventTime: 0,
-  };
-}
+      <section id="training" class="section">
+        <div class="card"><h3>Entrenamiento</h3><div class="row"><select id="trainArena"><option value="arena_orbit.js">Orbit</option><option value="arena_docking.js">Docking</option><option value="arena_code.js">Code</option><option value="arena_rendezvous.js">Rendezvous</option><option value="arena_wind_tunnel.js">Wind Tunnel</option></select><select id="trainDiff"><option value="1">Easy</option><option value="2">Medium</option><option value="3">Hard</option></select><button id="startTraining">Iniciar</button></div><div class="hud">Sin NOVA, solo XP reducida.</div></div>
+      </section>
 
-export function challengeGenerator({ difficulty = 1, seed = Math.random() } = {}) {
-  const moving = seed > 0.4;
-  const rotating = seed > 0.66;
-  const maxSpeed = clamp(4.1 - difficulty * 0.42, 2.0, 4.1);
-  const angleTolerance = clamp(18 - difficulty * 2, 6, 18);
-  return {
-    objective: "Acople milimétrico",
-    parameters: { moving, rotating, maxSpeed, angleTolerance, dockDistance: 18, requiredAngle: Math.PI * 0.5 },
-    success: `${moving ? "estación en movimiento" : "estación fija"} + vel<=${maxSpeed.toFixed(1)} + error angular<=${angleTolerance}°`,
-    fail: "Colisión, sobrecalentamiento o timeout",
-  };
-}
+      <section id="forum" class="section">
+        <div class="card"><h3>FORO</h3><input id="postTitle" placeholder="Título"/><textarea id="postBody" rows="3" placeholder="Contenido"></textarea><button id="postBtn">Publicar</button><div id="posts" class="log"></div></div>
+        <div class="card"><h3>Chat</h3><div id="chat" class="log"></div><div class="row"><input id="chatInput" placeholder="mensaje"/><button id="chatBtn">Enviar</button></div></div>
+      </section>
 
-export function ui(state) {
-  const relV = Math.hypot(state.ship.vx, state.ship.vy);
-  const angErr = Math.abs((state.ship.angle - state.challenge.parameters.requiredAngle) * 180 / Math.PI);
-  return {
-    title: metadata.name,
-    instructions: state.challenge.success,
-    stats: {
-      relV,
-      fuel: state.fuel,
-      dist: distance(state.ship, state.station),
-      elapsed: state.elapsed,
-      stability: state.ship.stability,
-      heat: state.ship.heat,
-      angErr,
-      event: state.event || "none",
-    },
-  };
-}
+      <section id="store" class="section"><div class="card"><h3>Tienda / Progresión</h3><div id="storeList" class="hud"></div><div class="row"><button data-upg="fuel">Upgrade Fuel</button><button data-upg="thrust">Upgrade Thrust</button><button data-upg="control">Upgrade Control</button></div><label>Especialización<select id="spec"><option value="tecnico">Técnico (+control)</option><option value="agresivo">Agresivo (+thrust)</option><option value="eficiente">Eficiente (-consumo)</option></select></label></div></section>
+      <section id="group" class="section"><div class="card"><h3>Grupo</h3><div class="row"><input id="groupCode" placeholder="Código"/><button id="joinGroup">Unirse</button></div><div id="groupMsg" class="hud"></div></div></section>
+    </main>
+  </div>
 
-export function inputHandler(state, action) {
-  if (state.fuel <= 0) return;
-  const power = 8 * state.thrustBoost * state.ship.controlBonus;
-  const jitter = state.ship.controlLoss ? (Math.random() - 0.5) * 0.18 : 0;
-  if (action === "UP") state.ship.vy -= power * 0.05 + jitter;
-  if (action === "DOWN") state.ship.vy += power * 0.05 + jitter;
-  if (action === "LEFT") state.ship.vx -= power * 0.05 + jitter;
-  if (action === "RIGHT") state.ship.vx += power * 0.05 + jitter;
-  if (action === "THRUST_ON") state.ship.heat = Math.min(100, state.ship.heat + 2.5);
-  if (["UP", "DOWN", "LEFT", "RIGHT", "THRUST_ON"].includes(action)) {
-    state.fuel = Math.max(0, state.fuel - state.fuelUsage);
-    for (let i = 0; i < 2; i++) state.particles.push({ x: state.ship.x, y: state.ship.y, vx: (Math.random() - 0.5) * 18, vy: (Math.random() - 0.5) * 18, life: 0.35 });
-  }
-}
+  <script type="module">
+    const STORAGE = "ylma_closed_v2";
+    const saved = JSON.parse(localStorage.getItem(STORAGE) || "{}");
+    const state = {
+      player: {
+        xp: saved.xp || 0,
+        nova: saved.nova || 0,
+        rank: "Cadete",
+        specialization: saved.specialization || "tecnico",
+        upgrades: saved.upgrades || { fuelEfficiency: 1, thrustPower: 1, control: 1 },
+        ownedArenas: ["arena_orbit.js", "arena_docking.js", "arena_code.js"],
+      },
+      pages: ["home", "competition", "training", "forum", "store", "group"],
+      arena: null,
+      arenaModule: null,
+      running: false,
+      replaying: false,
+      posts: JSON.parse(localStorage.getItem("ylma_posts") || "[]"),
+      chat: JSON.parse(localStorage.getItem("ylma_chat") || "[]"),
+      audio: null,
+    };
 
-function triggerEvent(state) {
-  const roll = Math.random();
-  state.event = roll < 0.33 ? "solar_wind" : roll < 0.66 ? "partial_thruster" : "gyro_drift";
-  state.eventTime = 2.4;
-}
+    const $ = (id) => document.getElementById(id);
+    const ctx = $("sim").getContext("2d");
+    const viewport = { width: 900, height: 520 };
+    const weighted = [{k:"arena_orbit.js",w:4},{k:"arena_docking.js",w:3},{k:"arena_code.js",w:2},{k:"arena_rendezvous.js",w:3},{k:"arena_wind_tunnel.js",w:3}];
 
-export function update(state, dt) {
-  state.elapsed += dt;
-  const p = state.challenge.parameters;
+    function savePlayer() {
+      localStorage.setItem(STORAGE, JSON.stringify({ xp: state.player.xp, nova: state.player.nova, upgrades: state.player.upgrades, specialization: state.player.specialization }));
+    }
 
-  if (p.moving) {
-    state.station.orbitAngle += dt * 0.6;
-    state.station.x = 120 + Math.cos(state.station.orbitAngle) * 45;
-    state.station.y = Math.sin(state.station.orbitAngle) * 28;
-  }
-  if (p.rotating) state.ship.angle += 0.18 * dt;
+    function setRank() {
+      const x = state.player.xp;
+      state.player.rank = x >= 1800 ? "Ingeniero orbital" : x >= 900 ? "Comandante" : x >= 300 ? "Piloto" : "Cadete";
+      $("xp").textContent = state.player.xp;
+      $("nova").textContent = state.player.nova;
+      $("rank").textContent = state.player.rank;
+      $("specLabel").textContent = state.player.specialization;
+      savePlayer();
+    }
 
-  const speed = Math.hypot(state.ship.vx, state.ship.vy);
-  if (speed > state.ship.safeLimit) state.ship.stability = Math.max(0, state.ship.stability - (speed - state.ship.safeLimit) * 7 * dt);
-  else state.ship.stability = Math.min(100, state.ship.stability + 2.6 * dt);
-  state.ship.heat = Math.max(0, state.ship.heat - 6 * dt);
-  if (state.ship.heat > 80) state.ship.stability = Math.max(0, state.ship.stability - 8 * dt);
-  state.ship.controlLoss = state.ship.stability < 32;
+    function nav() {
+      document.querySelectorAll(".btn").forEach((b) => b.onclick = () => {
+        document.querySelectorAll(".btn").forEach((x) => x.classList.remove("active"));
+        b.classList.add("active");
+        state.pages.forEach((p) => $(p).classList.toggle("active", p === b.dataset.s));
+      });
+    }
 
-  if (Math.random() < 0.0018 && !state.event) triggerEvent(state);
-  if (state.eventTime > 0) {
-    state.eventTime -= dt;
-    if (state.event === "solar_wind") state.ship.vx += (Math.random() - 0.5) * 0.25;
-    if (state.event === "partial_thruster") { state.ship.vx *= 0.995; state.ship.vy *= 0.995; }
-    if (state.event === "gyro_drift") state.ship.angle += 0.7 * dt;
-  } else state.event = null;
+    function renderFeed() {
+      $("news").innerHTML = ["Evento orbital activo", "Desafío diario de acople", "Bonus grupal +8%", "Nuevo modo de daño progresivo"].map((x)=>`• ${x}`).join("<br>");
+      $("storeList").innerHTML = [`Fuel Efficiency: x${state.player.upgrades.fuelEfficiency.toFixed(2)}`,`Thrust Power: x${state.player.upgrades.thrustPower.toFixed(2)}`,`Control: x${state.player.upgrades.control.toFixed(2)}`].join("<br>");
+      $("posts").innerHTML = state.posts.map((p)=>`<div><b>${p.t}</b><br>${p.b}</div><hr>`).join("") || "Sin posts";
+      $("chat").innerHTML = state.chat.map((m)=>`<div><b>${m.u}</b>: ${m.t}</div>`).join("") || "Sin chat";
+      $("spec").value = state.player.specialization;
+    }
 
-  state.world.update(dt);
-  const d = distance(state.ship, state.station);
-  const relSpeed = Math.hypot(state.ship.vx, state.ship.vy);
-  const angErr = Math.abs((state.ship.angle - p.requiredAngle) * 180 / Math.PI);
-  const closeEnough = d <= p.dockDistance;
-  const won = closeEnough && relSpeed <= p.maxSpeed && angErr <= p.angleTolerance;
-  const lost = (closeEnough && relSpeed > p.maxSpeed * 1.8) || state.elapsed > 80 || state.ship.stability < 5;
+    function initAudio() {
+      if (state.audio) return state.audio;
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      gain.gain.value = 0;
+      osc.frequency.value = 110;
+      osc.type = "sawtooth";
+      osc.connect(gain); gain.connect(ac.destination); osc.start();
+      state.audio = { ac, osc, gain, beepAt: 0 };
+      return state.audio;
+    }
 
-  state.camera.x += (state.ship.x - state.camera.x) * 0.09;
-  state.camera.y += (state.ship.y - state.camera.y) * 0.09;
-  state.camera.zoom += ((1 + relSpeed * 0.04) - state.camera.zoom) * 0.08;
-  if (lost) state.camera.shake = Math.min(9, state.camera.shake + 0.6);
-  state.camera.shake *= 0.9;
+    function updateAudio() {
+      if (!state.running || !state.arena) return;
+      const audio = initAudio();
+      if (audio.ac.state === "suspended") audio.ac.resume();
+      const now = audio.ac.currentTime;
+      const speed = state.arena.ship ? Math.hypot(state.arena.ship.vx || 0, state.arena.ship.vy || 0) : 0;
+      const activeThrust = state.arena.thrust?.active || false;
+      audio.gain.gain.setTargetAtTime(activeThrust ? 0.08 : 0.01, now, 0.08);
+      audio.osc.frequency.setTargetAtTime(95 + speed * 30 + (state.arena.ship?.heat || 0) * 0.4, now, 0.08);
+      if ((state.arena.ship?.stability || 100) < 28 && now > audio.beepAt) {
+        audio.beepAt = now + 0.5;
+        const beep = audio.ac.createOscillator();
+        const g = audio.ac.createGain();
+        beep.frequency.value = 760; g.gain.value = 0.0001;
+        beep.connect(g); g.connect(audio.ac.destination); beep.start(now); g.gain.exponentialRampToValueAtTime(0.06, now + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.15); beep.stop(now + 0.16);
+      }
+    }
 
-  state.particles = state.particles.map((pt) => ({ ...pt, x: pt.x + pt.vx * dt, y: pt.y + pt.vy * dt, life: pt.life - dt })).filter((pt) => pt.life > 0);
-  state.effect.fail = clamp(state.effect.fail + (lost ? 2.8 * dt : -2.5 * dt), 0, 1);
-  state.effect.success = clamp(state.effect.success + (won ? 2.5 * dt : -2.4 * dt), 0, 1);
+    async function loadArena(file, difficulty = 2) {
+      state.arenaModule = await import(`./${file}`);
+      state.arena = state.arenaModule.setup({ difficulty, upgrades: state.player.upgrades, specialization: state.player.specialization });
+      state.arena.challenge = state.arenaModule.challengeGenerator({ difficulty });
+      const ui = state.arenaModule.ui(state.arena);
+      $("arenaTitle").textContent = ui.title;
+      $("arenaInstructions").textContent = ui.instructions;
+      $("result").textContent = "";
+      state.running = true;
+      state.replaying = false;
+      state.last = performance.now();
+      requestAnimationFrame(loop);
+    }
 
-  state.history.push({ sx: state.ship.x, sy: state.ship.y, tx: state.station.x, ty: state.station.y, angle: state.ship.angle, stability: state.ship.stability, heat: state.ship.heat, t: state.elapsed });
-  if (state.history.length > 450) state.history.shift();
+    function loop(now) {
+      if (!state.running || !state.arenaModule || !state.arena || state.replaying) return;
+      const dt = Math.min(0.05, (now - state.last) / 1000 || 0.016);
+      state.last = now;
+      const status = state.arenaModule.update(state.arena, dt);
+      state.arenaModule.render(state.arena, ctx, viewport);
+      updateAudio();
+      const ui = state.arenaModule.ui(state.arena);
+      $("arenaStats").textContent = Object.entries(ui.stats).map(([k,v])=>`${k}: ${typeof v === "number" ? v.toFixed(2) : v}`).join(" | ");
+      $("eventBanner").textContent = ui.stats.event && ui.stats.event !== "none" ? `EVENTO: ${ui.stats.event}` : "";
+      if (status.won || status.lost) finish(status.won, status.lost);
+      else requestAnimationFrame(loop);
+    }
 
-  return { won, lost };
-}
+    async function playReplay() {
+      const history = state.arena?.history || [];
+      if (!history.length) return;
+      const frames = history.slice(-Math.min(180, history.length));
+      state.replaying = true;
+      state.running = false;
+      for (const snap of frames) {
+        if (state.arenaModule.renderReplay) state.arenaModule.renderReplay(state.arena, ctx, viewport, snap);
+        await new Promise((r) => setTimeout(r, 28));
+      }
+      state.replaying = false;
+    }
 
-function drawScene(snapshot, stationSnapshot, state, ctx, viewport) {
-  const { width, height } = viewport;
-  const cx = width * 0.5;
-  const cy = height * 0.5;
-  const shakeX = (Math.random() - 0.5) * state.camera.shake;
-  const shakeY = (Math.random() - 0.5) * state.camera.shake;
+    async function finish(won, lostByFail = false) {
+      state.running = false;
+      const r = state.arenaModule.evaluate(state.arena, won);
+      state.player.xp += r.xp;
+      state.player.nova += r.nova;
+      setRank();
+      $("result").textContent = `${r.summary} | XP +${r.xp} | NOVA +${r.nova}`;
+      if (won) {
+        $("panelCard").classList.add("flash");
+        setTimeout(()=>$("panelCard").classList.remove("flash"), 300);
+      }
+      if (lostByFail) {
+        const audio = initAudio();
+        const now = audio.ac.currentTime;
+        const bo = audio.ac.createOscillator(); const g = audio.ac.createGain(); bo.frequency.value = 120; bo.connect(g); g.connect(audio.ac.destination); bo.start(now); g.gain.setValueAtTime(0.08, now); g.gain.exponentialRampToValueAtTime(0.0001, now + 0.35); bo.stop(now + 0.36);
+      }
+      await new Promise((r2) => setTimeout(r2, 350));
+      await playReplay();
+    }
 
-  ctx.save();
-  ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#061229";
-  ctx.fillRect(0, 0, width, height);
-  ctx.translate(cx + shakeX, cy + shakeY);
-  ctx.scale(state.camera.zoom, state.camera.zoom);
-  ctx.translate(-state.camera.x, -state.camera.y);
+    function weightedArena() {
+      const owned = new Set(state.player.ownedArenas);
+      const pool = weighted.filter((a) => owned.has(a.k));
+      const sum = pool.reduce((s, x) => s + x.w, 0);
+      let r = Math.random() * sum;
+      for (const p of pool) { r -= p.w; if (r <= 0) return p.k; }
+      return pool[0]?.k || "arena_orbit.js";
+    }
 
-  ctx.fillStyle = "#7db0ff";
-  ctx.fillRect(stationSnapshot.x - 22, stationSnapshot.y - 22, 44, 44);
-  ctx.strokeStyle = "rgba(190,230,255,0.5)";
-  ctx.beginPath();
-  ctx.arc(stationSnapshot.x, stationSnapshot.y, state.challenge.parameters.dockDistance, 0, Math.PI * 2);
-  ctx.stroke();
+    $("startComp").onclick = async () => {
+      $("mm").textContent = "Matchmaking... (máx 20s)";
+      await new Promise((r) => setTimeout(r, 2000 + Math.random() * 4000));
+      const humans = 1 + Math.floor(Math.random() * 6);
+      const bots = Math.max(0, 6 - humans);
+      $("lobby").textContent = `Lobby: ${humans} jugadores + ${bots} bots`;
+      const cards = ["arena_orbit.js", "arena_docking.js", "arena_code.js", "arena_rendezvous.js", "arena_wind_tunnel.js"];
+      let i = 0;
+      const t = setInterval(()=>{ $("carousel").innerHTML = cards.map((c,idx)=>`<div class='pill ${idx===i?"active":""}'>${c}</div>`).join(""); i=(i+1)%cards.length; }, 160);
+      await new Promise((r)=>setTimeout(r, 2600));
+      clearInterval(t);
+      const selected = weightedArena();
+      $("carousel").innerHTML = cards.map((c)=>`<div class='pill ${c===selected?"active":""}'>${c}</div>`).join("");
+      await loadArena(selected, 2);
+    };
 
-  for (const p of state.particles) {
-    ctx.fillStyle = `rgba(255,220,140,${p.life})`;
-    ctx.fillRect(p.x, p.y, 2, 2);
-  }
+    $("startTraining").onclick = () => loadArena($("trainArena").value, Number($("trainDiff").value));
+    $("finish").onclick = () => finish(false, true);
+    $("thrustOn").onclick = () => state.arenaModule?.inputHandler(state.arena, "THRUST_ON");
+    $("thrustOff").onclick = () => state.arenaModule?.inputHandler(state.arena, "THRUST_OFF");
+    $("left").onclick = () => state.arenaModule?.inputHandler(state.arena, "LEFT");
+    $("right").onclick = () => state.arenaModule?.inputHandler(state.arena, "RIGHT");
+    $("up").onclick = () => state.arenaModule?.inputHandler(state.arena, "UP");
+    $("down").onclick = () => state.arenaModule?.inputHandler(state.arena, "DOWN");
+    $("runCode").onclick = () => {
+      state.arenaModule?.inputHandler(state.arena, { type: "SET_CODE", value: $("codeInput").value });
+      state.arenaModule?.inputHandler(state.arena, { type: "RUN" });
+    };
 
-  ctx.save();
-  ctx.translate(snapshot.x, snapshot.y);
-  ctx.rotate(snapshot.angle);
-  ctx.fillStyle = "#ffffff";
-  ctx.beginPath();
-  ctx.moveTo(10, 0);
-  ctx.lineTo(-8, 6);
-  ctx.lineTo(-8, -6);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
-  ctx.restore();
+    $("postBtn").onclick = () => {
+      const t = $("postTitle").value.trim(); const b = $("postBody").value.trim();
+      if (!t || !b) return;
+      state.posts.unshift({ t, b });
+      localStorage.setItem("ylma_posts", JSON.stringify(state.posts));
+      state.player.xp += 12; setRank(); renderFeed();
+    };
+    $("chatBtn").onclick = () => {
+      const t = $("chatInput").value.trim(); if (!t) return;
+      state.chat.push({ u: "Pilot", t }); localStorage.setItem("ylma_chat", JSON.stringify(state.chat)); renderFeed();
+    };
 
-  if (state.effect.fail > 0) {
-    ctx.fillStyle = `rgba(255,25,25,${state.effect.fail * 0.4})`;
-    ctx.fillRect(0, 0, width, height);
-  }
-  if (state.effect.success > 0) {
-    ctx.fillStyle = `rgba(255,255,255,${state.effect.success * 0.5})`;
-    ctx.fillRect(0, 0, width, height);
-  }
-}
+    document.querySelectorAll("[data-upg]").forEach((btn) => btn.onclick = () => {
+      const cost = 60;
+      if (state.player.nova < cost) return;
+      state.player.nova -= cost;
+      if (btn.dataset.upg === "fuel") state.player.upgrades.fuelEfficiency += 0.08;
+      if (btn.dataset.upg === "thrust") state.player.upgrades.thrustPower += 0.08;
+      if (btn.dataset.upg === "control") state.player.upgrades.control += 0.08;
+      setRank(); renderFeed();
+    });
+    $("spec").onchange = (e) => { state.player.specialization = e.target.value; setRank(); renderFeed(); };
 
-export function render(state, ctx, viewport) {
-  drawScene({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle }, { x: state.station.x, y: state.station.y }, state, ctx, viewport);
-}
+    $("joinGroup").onclick = () => { const c = $("groupCode").value.trim().toUpperCase(); if (c) $("groupMsg").textContent = `Grupo ${c} unido. Bonus activo +8%`; };
 
-export function renderReplay(state, ctx, viewport, snapshot) {
-  drawScene({ x: snapshot.sx, y: snapshot.sy, angle: snapshot.angle }, { x: snapshot.tx, y: snapshot.ty }, state, ctx, viewport);
-}
-
-export function evaluate(state, won) {
-  const relSpeed = Math.hypot(state.ship.vx, state.ship.vy);
-  const d = distance(state.ship, state.station);
-  const precision = clamp((state.ship.stability + clamp(100 - d * 2 - relSpeed * 8, 0, 100)) * 0.5, 0, 100);
-  const xp = Math.round(18 + precision * 0.36 + (won ? 48 : 0));
-  const nova = won ? Math.round(26 + precision * 0.32) : 0;
-  return { won, precision, xp, nova, summary: won ? "Acople quirúrgico" : "Acople no logrado" };
-}
+    nav(); setRank(); renderFeed();
+  </script>
+</body>
+</html>
