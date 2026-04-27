@@ -163,3 +163,5 @@ export function evaluate(state, won) {
   const nova = won ? Math.round(14 + efficiency * 0.22) : 0;
   return { won, efficiency, xp, nova, summary: won ? "Reto lógico brillante" : "Reto lógico fallido" };
 }
+
+
