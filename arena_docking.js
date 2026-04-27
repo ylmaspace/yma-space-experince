@@ -8,14 +8,11 @@ export function setup({ difficulty = 1, upgrades = {}, specialization = "tecnico
   station.orbitAngle = 0;
   const ship = createBody({ id: "ship", x: -240, y: 20, vx: 18, vy: 0, mass: 4, area: 1.2, dragCoeff: 0.3, inertia: 1.5 });
   ship.forces.push(new DragForce(0.45));
-  ship.stability = 100;
-  ship.heat = 0;
-  ship.controlLoss = false;
+  ship.stability = 100; ship.heat = 0; ship.controlLoss = false;
   ship.safeLimit = 4.4 + (upgrades.control || 1) * 0.25;
   ship.controlBonus = specialization === "tecnico" ? 1.2 : specialization === "agresivo" ? 0.85 : 1;
 
-  world.addBody(station);
-  world.addBody(ship);
+  world.addBody(station); world.addBody(ship);
   return {
     world, station, ship,
     elapsed: 0,
@@ -40,7 +37,7 @@ export function challengeGenerator({ difficulty = 1, seed = Math.random() } = {}
   return {
     objective: "Acople milimétrico",
     parameters: { moving, rotating, maxSpeed, angleTolerance, dockDistance: 18, requiredAngle: Math.PI * 0.5 },
-    success: `${moving ? "estación en movimiento" : "estación fija"} + vel<=${maxSpeed.toFixed(1)} + error angular<=${angleTolerance}°`,
+    success: `vel<=${maxSpeed.toFixed(1)} y error angular<=${angleTolerance}°`,
     fail: "Colisión, sobrecalentamiento o timeout",
   };
 }
@@ -51,16 +48,7 @@ export function ui(state) {
   return {
     title: metadata.name,
     instructions: state.challenge.success,
-    stats: {
-      relV,
-      fuel: state.fuel,
-      dist: distance(state.ship, state.station),
-      elapsed: state.elapsed,
-      stability: state.ship.stability,
-      heat: state.ship.heat,
-      angErr,
-      event: state.event || "none",
-    },
+    stats: { relV, fuel: state.fuel, dist: distance(state.ship, state.station), elapsed: state.elapsed, stability: state.ship.stability, heat: state.ship.heat, angErr, event: state.event || "none" },
   };
 }
 
@@ -88,7 +76,6 @@ function triggerEvent(state) {
 export function update(state, dt) {
   state.elapsed += dt;
   const p = state.challenge.parameters;
-
   if (p.moving) {
     state.station.orbitAngle += dt * 0.6;
     state.station.x = 120 + Math.cos(state.station.orbitAngle) * 45;
@@ -185,13 +172,8 @@ function drawScene(snapshot, stationSnapshot, state, ctx, viewport) {
   }
 }
 
-export function render(state, ctx, viewport) {
-  drawScene({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle }, { x: state.station.x, y: state.station.y }, state, ctx, viewport);
-}
-
-export function renderReplay(state, ctx, viewport, snapshot) {
-  drawScene({ x: snapshot.sx, y: snapshot.sy, angle: snapshot.angle }, { x: snapshot.tx, y: snapshot.ty }, state, ctx, viewport);
-}
+export function render(state, ctx, viewport) { drawScene({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle }, { x: state.station.x, y: state.station.y }, state, ctx, viewport); }
+export function renderReplay(state, ctx, viewport, snapshot) { drawScene({ x: snapshot.sx, y: snapshot.sy, angle: snapshot.angle }, { x: snapshot.tx, y: snapshot.ty }, state, ctx, viewport); }
 
 export function evaluate(state, won) {
   const relSpeed = Math.hypot(state.ship.vx, state.ship.vy);
