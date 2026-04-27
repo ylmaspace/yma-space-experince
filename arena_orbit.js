@@ -1,31 +1,30 @@
-import { PhysicsWorld, createBody, DragForce, clamp, distance } from "./physics-engine.js";
+import { PhysicsWorld, createBody, GravityForce, DragForce, ThrustForce, clamp } from "./physics-engine.js";
 
-export const metadata = { name: "DOCKING PRECISION", type: "docking", baseDifficulty: 3 };
+export const metadata = { name: "ORBIT CORRECTOR", type: "orbit", baseDifficulty: 2 };
 
 export function setup({ difficulty = 1, upgrades = {}, specialization = "tecnico" } = {}) {
-  const world = new PhysicsWorld({ gravity: { x: 0, y: 0 }, airDensity: 0.05 });
-  const station = createBody({ id: "station", static: true, x: 130, y: -20, mass: 9999 });
-  station.orbitAngle = 0;
-  const ship = createBody({ id: "ship", x: -240, y: 20, vx: 18, vy: 0, mass: 4, area: 1.2, dragCoeff: 0.3, inertia: 1.5 });
-  ship.forces.push(new DragForce(0.45));
-  ship.stability = 100;
-  ship.heat = 0;
-  ship.controlLoss = false;
-  ship.safeLimit = 4.4 + (upgrades.control || 1) * 0.25;
-  ship.controlBonus = specialization === "tecnico" ? 1.2 : specialization === "agresivo" ? 0.85 : 1;
+  const world = new PhysicsWorld({ gravity: { x: 0, y: 0 }, airDensity: 0.0012 });
+  const planet = createBody({ id: "planet", mass: 18000, static: true, x: 0, y: 0 });
+  const ship = createBody({ id: "ship", mass: 5, area: 1.8, dragCoeff: 0.12, x: 220, y: -10, vx: -0.2, vy: 1.7 + difficulty * 0.08, inertia: 2 });
+  ship.stability = 100; ship.heat = 0; ship.controlLoss = false;
+  ship.safeLimit = 2.4 + (upgrades.control || 1) * 0.35;
+  ship.controlBias = specialization === "tecnico" ? 0.8 : specialization === "agresivo" ? 1.25 : 1;
 
-  world.addBody(station);
-  world.addBody(ship);
+  ship.forces.push(new GravityForce(42), new DragForce(1));
+  const thrust = new ThrustForce(28 * (upgrades.thrustPower || 1));
+  ship.forces.push(thrust);
+  world.addBody(planet); world.addBody(ship);
+
   return {
-    world, station, ship,
-    elapsed: 0,
-    challenge: null,
+    world, ship, planet, thrust,
     fuel: 100,
-    fuelUsage: 0.6 / (upgrades.fuelEfficiency || 1),
-    thrustBoost: upgrades.thrustPower || 1,
-    camera: { x: ship.x, y: ship.y, zoom: 1, shake: 0 },
+    fuelUsage: 8 / (upgrades.fuelEfficiency || 1),
+    elapsed: 0,
+    successTime: 0,
+    challenge: null,
     particles: [],
     history: [],
+    camera: { x: ship.x, y: ship.y, zoom: 1, shake: 0 },
     effect: { fail: 0, success: 0 },
     event: null,
     eventTime: 0,
@@ -33,32 +32,31 @@ export function setup({ difficulty = 1, upgrades = {}, specialization = "tecnico
 }
 
 export function challengeGenerator({ difficulty = 1, seed = Math.random() } = {}) {
-  const moving = seed > 0.4;
-  const rotating = seed > 0.66;
-  const maxSpeed = clamp(4.1 - difficulty * 0.42, 2.0, 4.1);
-  const angleTolerance = clamp(18 - difficulty * 2, 6, 18);
+  const variants = ["elliptic_hold", "periapsis_window", "transfer_injection"];
+  const variant = variants[Math.floor(seed * variants.length)];
+  const targetRadius = 170 + Math.floor(seed * 70);
+  const tolerance = clamp(18 - difficulty * 1.7, 7, 18);
+  const holdSeconds = 6 + Math.floor(difficulty * 2);
   return {
-    objective: "Acople milimétrico",
-    parameters: { moving, rotating, maxSpeed, angleTolerance, dockDistance: 18, requiredAngle: Math.PI * 0.5 },
-    success: `${moving ? "estación en movimiento" : "estación fija"} + vel<=${maxSpeed.toFixed(1)} + error angular<=${angleTolerance}°`,
-    fail: "Colisión, sobrecalentamiento o timeout",
+    objective: "Dominar mecánica orbital",
+    variant,
+    parameters: { targetRadius, tolerance, holdSeconds },
+    success: `${variant}: mantener radio objetivo con control térmico`,
+    fail: "Pérdida de control o combustible crítico",
   };
 }
 
 export function ui(state) {
-  const relV = Math.hypot(state.ship.vx, state.ship.vy);
-  const angErr = Math.abs((state.ship.angle - state.challenge.parameters.requiredAngle) * 180 / Math.PI);
   return {
     title: metadata.name,
-    instructions: state.challenge.success,
+    instructions: state.challenge?.success || "Estabiliza órbita",
     stats: {
-      relV,
       fuel: state.fuel,
-      dist: distance(state.ship, state.station),
       elapsed: state.elapsed,
+      radius: Math.hypot(state.ship.x, state.ship.y),
+      speed: Math.hypot(state.ship.vx, state.ship.vy),
       stability: state.ship.stability,
       heat: state.ship.heat,
-      angErr,
       event: state.event || "none",
     },
   };
@@ -66,76 +64,77 @@ export function ui(state) {
 
 export function inputHandler(state, action) {
   if (state.fuel <= 0) return;
-  const power = 8 * state.thrustBoost * state.ship.controlBonus;
-  const jitter = state.ship.controlLoss ? (Math.random() - 0.5) * 0.18 : 0;
-  if (action === "UP") state.ship.vy -= power * 0.05 + jitter;
-  if (action === "DOWN") state.ship.vy += power * 0.05 + jitter;
-  if (action === "LEFT") state.ship.vx -= power * 0.05 + jitter;
-  if (action === "RIGHT") state.ship.vx += power * 0.05 + jitter;
-  if (action === "THRUST_ON") state.ship.heat = Math.min(100, state.ship.heat + 2.5);
-  if (["UP", "DOWN", "LEFT", "RIGHT", "THRUST_ON"].includes(action)) {
-    state.fuel = Math.max(0, state.fuel - state.fuelUsage);
-    for (let i = 0; i < 2; i++) state.particles.push({ x: state.ship.x, y: state.ship.y, vx: (Math.random() - 0.5) * 18, vy: (Math.random() - 0.5) * 18, life: 0.35 });
-  }
+  const noise = state.ship.controlLoss ? (Math.random() - 0.5) * 0.22 : 0;
+  if (action === "THRUST_ON") state.thrust.active = true;
+  if (action === "THRUST_OFF") state.thrust.active = false;
+  if (action === "LEFT") state.ship.angle -= 0.08 * state.ship.controlBias + noise;
+  if (action === "RIGHT") state.ship.angle += 0.08 * state.ship.controlBias + noise;
 }
 
 function triggerEvent(state) {
   const roll = Math.random();
-  state.event = roll < 0.33 ? "solar_wind" : roll < 0.66 ? "partial_thruster" : "gyro_drift";
-  state.eventTime = 2.4;
+  state.event = roll < 0.34 ? "solar_wind" : roll < 0.67 ? "partial_engine" : "drift_spin";
+  state.eventTime = 2.6;
 }
 
 export function update(state, dt) {
   state.elapsed += dt;
-  const p = state.challenge.parameters;
-
-  if (p.moving) {
-    state.station.orbitAngle += dt * 0.6;
-    state.station.x = 120 + Math.cos(state.station.orbitAngle) * 45;
-    state.station.y = Math.sin(state.station.orbitAngle) * 28;
-  }
-  if (p.rotating) state.ship.angle += 0.18 * dt;
-
   const speed = Math.hypot(state.ship.vx, state.ship.vy);
-  if (speed > state.ship.safeLimit) state.ship.stability = Math.max(0, state.ship.stability - (speed - state.ship.safeLimit) * 7 * dt);
-  else state.ship.stability = Math.min(100, state.ship.stability + 2.6 * dt);
-  state.ship.heat = Math.max(0, state.ship.heat - 6 * dt);
-  if (state.ship.heat > 80) state.ship.stability = Math.max(0, state.ship.stability - 8 * dt);
-  state.ship.controlLoss = state.ship.stability < 32;
+
+  if (speed > state.ship.safeLimit) state.ship.stability = Math.max(0, state.ship.stability - (speed - state.ship.safeLimit) * 6 * dt);
+  else state.ship.stability = Math.min(100, state.ship.stability + 3 * dt);
+
+  if (state.thrust.active) {
+    state.fuel = Math.max(0, state.fuel - state.fuelUsage * dt);
+    state.ship.heat = Math.min(100, state.ship.heat + 18 * dt);
+  } else {
+    state.ship.heat = Math.max(0, state.ship.heat - 9 * dt);
+  }
+
+  if (state.ship.heat > 82) state.ship.stability = Math.max(0, state.ship.stability - 9 * dt);
+  state.ship.controlLoss = state.ship.stability < 30;
 
   if (Math.random() < 0.0018 && !state.event) triggerEvent(state);
   if (state.eventTime > 0) {
     state.eventTime -= dt;
-    if (state.event === "solar_wind") state.ship.vx += (Math.random() - 0.5) * 0.25;
-    if (state.event === "partial_thruster") { state.ship.vx *= 0.995; state.ship.vy *= 0.995; }
-    if (state.event === "gyro_drift") state.ship.angle += 0.7 * dt;
-  } else state.event = null;
+    if (state.event === "solar_wind") state.ship.vx += (Math.random() - 0.5) * 0.3;
+    if (state.event === "partial_engine") state.thrust.throttle = 0.45;
+    if (state.event === "drift_spin") state.ship.angle += 0.9 * dt;
+  } else {
+    state.event = null;
+    state.thrust.throttle = 1;
+  }
 
   state.world.update(dt);
-  const d = distance(state.ship, state.station);
-  const relSpeed = Math.hypot(state.ship.vx, state.ship.vy);
-  const angErr = Math.abs((state.ship.angle - p.requiredAngle) * 180 / Math.PI);
-  const closeEnough = d <= p.dockDistance;
-  const won = closeEnough && relSpeed <= p.maxSpeed && angErr <= p.angleTolerance;
-  const lost = (closeEnough && relSpeed > p.maxSpeed * 1.8) || state.elapsed > 80 || state.ship.stability < 5;
 
-  state.camera.x += (state.ship.x - state.camera.x) * 0.09;
-  state.camera.y += (state.ship.y - state.camera.y) * 0.09;
-  state.camera.zoom += ((1 + relSpeed * 0.04) - state.camera.zoom) * 0.08;
-  if (lost) state.camera.shake = Math.min(9, state.camera.shake + 0.6);
+  const radius = Math.hypot(state.ship.x, state.ship.y);
+  const { targetRadius, tolerance, holdSeconds } = state.challenge.parameters;
+  const stable = Math.abs(radius - targetRadius) <= tolerance && state.ship.stability > 35;
+  state.successTime = stable ? state.successTime + dt : 0;
+  const won = state.successTime >= holdSeconds;
+  const lost = (state.fuel <= 0 && !won) || state.ship.stability <= 5;
+
+  state.camera.x += (state.ship.x - state.camera.x) * 0.08;
+  state.camera.y += (state.ship.y - state.camera.y) * 0.08;
+  state.camera.zoom += ((1 + speed * 0.08) - state.camera.zoom) * 0.08;
+  if (lost) state.camera.shake = Math.min(10, state.camera.shake + 0.45);
   state.camera.shake *= 0.9;
 
-  state.particles = state.particles.map((pt) => ({ ...pt, x: pt.x + pt.vx * dt, y: pt.y + pt.vy * dt, life: pt.life - dt })).filter((pt) => pt.life > 0);
-  state.effect.fail = clamp(state.effect.fail + (lost ? 2.8 * dt : -2.5 * dt), 0, 1);
-  state.effect.success = clamp(state.effect.success + (won ? 2.5 * dt : -2.4 * dt), 0, 1);
+  if (state.thrust.active) {
+    for (let i = 0; i < 3; i++) state.particles.push({ x: state.ship.x, y: state.ship.y, vx: -Math.cos(state.ship.angle) * (18 + i * 4), vy: -Math.sin(state.ship.angle) * (18 + i * 4), life: 0.45 });
+  }
+  state.particles = state.particles.map((p) => ({ ...p, x: p.x + p.vx * dt, y: p.y + p.vy * dt, life: p.life - dt })).filter((p) => p.life > 0);
 
-  state.history.push({ sx: state.ship.x, sy: state.ship.y, tx: state.station.x, ty: state.station.y, angle: state.ship.angle, stability: state.ship.stability, heat: state.ship.heat, t: state.elapsed });
+  state.effect.fail = clamp(state.effect.fail + (lost ? 2.4 * dt : -2.8 * dt), 0, 1);
+  state.effect.success = clamp(state.effect.success + (won ? 2.4 * dt : -2.4 * dt), 0, 1);
+
+  state.history.push({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle, stability: state.ship.stability, heat: state.ship.heat, t: state.elapsed });
   if (state.history.length > 450) state.history.shift();
 
   return { won, lost };
 }
 
-function drawScene(snapshot, stationSnapshot, state, ctx, viewport) {
+function drawScene(shipLike, state, ctx, viewport) {
   const { width, height } = viewport;
   const cx = width * 0.5;
   const cy = height * 0.5;
@@ -144,60 +143,61 @@ function drawScene(snapshot, stationSnapshot, state, ctx, viewport) {
 
   ctx.save();
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#061229";
+  ctx.fillStyle = "#031022";
   ctx.fillRect(0, 0, width, height);
   ctx.translate(cx + shakeX, cy + shakeY);
   ctx.scale(state.camera.zoom, state.camera.zoom);
   ctx.translate(-state.camera.x, -state.camera.y);
 
-  ctx.fillStyle = "#7db0ff";
-  ctx.fillRect(stationSnapshot.x - 22, stationSnapshot.y - 22, 44, 44);
-  ctx.strokeStyle = "rgba(190,230,255,0.5)";
+  ctx.strokeStyle = "rgba(130,220,255,0.45)";
   ctx.beginPath();
-  ctx.arc(stationSnapshot.x, stationSnapshot.y, state.challenge.parameters.dockDistance, 0, Math.PI * 2);
+  ctx.arc(0, 0, state.challenge.parameters.targetRadius, 0, Math.PI * 2);
   ctx.stroke();
 
+  ctx.fillStyle = "#2b78cf";
+  ctx.beginPath();
+  ctx.arc(0, 0, 36, 0, Math.PI * 2);
+  ctx.fill();
+
   for (const p of state.particles) {
-    ctx.fillStyle = `rgba(255,220,140,${p.life})`;
+    ctx.fillStyle = `rgba(124,220,255,${p.life})`;
     ctx.fillRect(p.x, p.y, 2, 2);
   }
 
-  ctx.save();
-  ctx.translate(snapshot.x, snapshot.y);
-  ctx.rotate(snapshot.angle);
-  ctx.fillStyle = "#ffffff";
+  if (state.thrust.active) {
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "#4dd8ff";
+  }
+  ctx.fillStyle = "#e8f8ff";
   ctx.beginPath();
-  ctx.moveTo(10, 0);
-  ctx.lineTo(-8, 6);
-  ctx.lineTo(-8, -6);
-  ctx.closePath();
+  ctx.arc(shipLike.x, shipLike.y, 6, 0, Math.PI * 2);
   ctx.fill();
-  ctx.restore();
+  ctx.shadowBlur = 0;
   ctx.restore();
 
+  if (state.ship.stability < 35) {
+    ctx.fillStyle = `rgba(255,40,40,${(35 - state.ship.stability) / 90})`;
+    ctx.fillRect(0, 0, width, height);
+  }
   if (state.effect.fail > 0) {
-    ctx.fillStyle = `rgba(255,25,25,${state.effect.fail * 0.4})`;
+    ctx.fillStyle = `rgba(255,20,20,${state.effect.fail * 0.35})`;
     ctx.fillRect(0, 0, width, height);
   }
   if (state.effect.success > 0) {
-    ctx.fillStyle = `rgba(255,255,255,${state.effect.success * 0.5})`;
+    ctx.fillStyle = `rgba(255,255,255,${state.effect.success * 0.6})`;
     ctx.fillRect(0, 0, width, height);
   }
 }
 
-export function render(state, ctx, viewport) {
-  drawScene({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle }, { x: state.station.x, y: state.station.y }, state, ctx, viewport);
-}
-
-export function renderReplay(state, ctx, viewport, snapshot) {
-  drawScene({ x: snapshot.sx, y: snapshot.sy, angle: snapshot.angle }, { x: snapshot.tx, y: snapshot.ty }, state, ctx, viewport);
-}
+export function render(state, ctx, viewport) { drawScene(state.ship, state, ctx, viewport); }
+export function renderReplay(state, ctx, viewport, snapshot) { drawScene(snapshot, state, ctx, viewport); }
 
 export function evaluate(state, won) {
-  const relSpeed = Math.hypot(state.ship.vx, state.ship.vy);
-  const d = distance(state.ship, state.station);
-  const precision = clamp((state.ship.stability + clamp(100 - d * 2 - relSpeed * 8, 0, 100)) * 0.5, 0, 100);
-  const xp = Math.round(18 + precision * 0.36 + (won ? 48 : 0));
-  const nova = won ? Math.round(26 + precision * 0.32) : 0;
-  return { won, precision, xp, nova, summary: won ? "Acople quirúrgico" : "Acople no logrado" };
+  const radius = Math.hypot(state.ship.x, state.ship.y);
+  const err = Math.abs(radius - state.challenge.parameters.targetRadius);
+  const stability = clamp((state.ship.stability + clamp(100 - err * 2.2, 0, 100)) * 0.5, 0, 100);
+  const xp = Math.round(22 + stability * 0.32 + (won ? 44 : 0));
+  const nova = won ? Math.round(38 + stability * 0.26) : 0;
+  return { won, stability, xp, nova, summary: won ? "Órbita dominada" : "Órbita fuera de control" };
 }
+
