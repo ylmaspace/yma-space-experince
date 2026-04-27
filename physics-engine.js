@@ -101,3 +101,5 @@ export class TorqueForce {
 export const kineticEnergy = (b) => 0.5 * b.mass * (b.vx ** 2 + b.vy ** 2);
 export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 export const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+
