@@ -1,0 +1,127 @@
+import { PhysicsWorld, createBody, DragForce, ThrustForce, clamp } from "./physics-engine.js";
+
+export const metadata = { name: "WIND TUNNEL BUILDER", type: "wind_tunnel", baseDifficulty: 2 };
+
+export function setup({ difficulty = 1, upgrades = {}, specialization = "tecnico" } = {}) {
+  const world = new PhysicsWorld({ gravity: { x: 0, y: 0 }, airDensity: 0.08 });
+  const ship = createBody({ id: "craft", mass: 4, area: 2.1, dragCoeff: 0.5, x: -220, y: 0, vx: 10 + difficulty, vy: 0, inertia: 1.2 });
+  ship.stability = 100; ship.heat = 0; ship.controlLoss = false;
+  ship.safeLimit = 16 + (upgrades.control || 1) * 0.4;
+  ship.controlGain = specialization === "tecnico" ? 1.2 : specialization === "agresivo" ? 0.9 : 1;
+  const thrust = new ThrustForce(14 * (upgrades.thrustPower || 1));
+  ship.forces.push(new DragForce(1), thrust);
+  world.addBody(ship);
+  return { world, ship, thrust, elapsed: 0, challenge: null, fuel: 100, fuelUsage: 0.45 / (upgrades.fuelEfficiency || 1), particles: [], history: [], camera: { x: ship.x, y: ship.y, zoom: 1, shake: 0 }, effect: { fail: 0, success: 0 }, event: null, eventTime: 0, stableTime: 0 };
+}
+
+export function challengeGenerator({ difficulty = 1, seed = Math.random() } = {}) {
+  const dragTarget = clamp(28 + difficulty * 8 + seed * 10, 28, 72);
+  const holdSeconds = 5 + difficulty;
+  return { objective: "Reducir drag y mantener línea", parameters: { dragTarget, holdSeconds, tunnelHalfHeight: 95 }, success: `drag<${dragTarget.toFixed(1)} y permanecer en túnel ${holdSeconds}s`, fail: "Salida del túnel, sobrecalentamiento o inestabilidad" };
+}
+
+export function ui(state) {
+  const speed = Math.hypot(state.ship.vx, state.ship.vy);
+  const dragProxy = speed * state.ship.dragCoeff * state.world.airDensity * 100;
+  return { title: metadata.name, instructions: state.challenge.success, stats: { speed, drag: dragProxy, fuel: state.fuel, elapsed: state.elapsed, stability: state.ship.stability, heat: state.ship.heat, event: state.event || "none" } };
+}
+
+export function inputHandler(state, action) {
+  if (state.fuel <= 0) return;
+  const n = state.ship.controlLoss ? (Math.random() - 0.5) * 0.16 : 0;
+  if (action === "THRUST_ON") state.thrust.active = true;
+  if (action === "THRUST_OFF") state.thrust.active = false;
+  if (action === "UP") state.ship.vy -= 0.24 * state.ship.controlGain + n;
+  if (action === "DOWN") state.ship.vy += 0.24 * state.ship.controlGain + n;
+}
+
+function triggerEvent(state) {
+  const r = Math.random();
+  state.event = r < 0.33 ? "gust" : r < 0.66 ? "engine_choke" : "drift";
+  state.eventTime = 2.1;
+}
+
+export function update(state, dt) {
+  state.elapsed += dt;
+  if (state.thrust.active) {
+    state.fuel = Math.max(0, state.fuel - state.fuelUsage);
+    state.ship.heat = Math.min(100, state.ship.heat + 16 * dt);
+  } else {
+    state.ship.heat = Math.max(0, state.ship.heat - 7 * dt);
+  }
+
+  const speed = Math.hypot(state.ship.vx, state.ship.vy);
+  if (speed > state.ship.safeLimit) state.ship.stability = Math.max(0, state.ship.stability - (speed - state.ship.safeLimit) * 4.5 * dt);
+  else state.ship.stability = Math.min(100, state.ship.stability + 2.4 * dt);
+  if (state.ship.heat > 80) state.ship.stability = Math.max(0, state.ship.stability - 8 * dt);
+  state.ship.controlLoss = state.ship.stability < 30;
+
+  if (Math.random() < 0.0019 && !state.event) triggerEvent(state);
+  if (state.eventTime > 0) {
+    state.eventTime -= dt;
+    if (state.event === "gust") state.ship.vy += (Math.random() - 0.5) * 0.4;
+    if (state.event === "engine_choke") state.thrust.throttle = 0.5;
+    if (state.event === "drift") state.ship.vx += (Math.random() - 0.5) * 0.2;
+  } else {
+    state.event = null;
+    state.thrust.throttle = 1;
+  }
+
+  state.world.update(dt);
+  const dragProxy = speed * state.ship.dragCoeff * state.world.airDensity * 100;
+  const inTunnel = Math.abs(state.ship.y) <= state.challenge.parameters.tunnelHalfHeight;
+  const stable = dragProxy <= state.challenge.parameters.dragTarget && inTunnel && state.ship.stability > 30;
+  state.stableTime = stable ? state.stableTime + dt : 0;
+  const won = state.stableTime >= state.challenge.parameters.holdSeconds;
+  const lost = !inTunnel || state.ship.stability <= 5;
+
+  state.camera.x += (state.ship.x - state.camera.x) * 0.08;
+  state.camera.y += (state.ship.y - state.camera.y) * 0.08;
+  state.camera.zoom += ((1 + speed * 0.03) - state.camera.zoom) * 0.08;
+  if (lost) state.camera.shake = Math.min(8, state.camera.shake + 0.5);
+  state.camera.shake *= 0.9;
+
+  if (state.thrust.active) for (let i = 0; i < 3; i++) state.particles.push({ x: state.ship.x, y: state.ship.y, vx: -10 - i * 3, vy: (Math.random() - 0.5) * 6, life: 0.35 });
+  state.particles = state.particles.map((p) => ({ ...p, x: p.x + p.vx * dt, y: p.y + p.vy * dt, life: p.life - dt })).filter((p) => p.life > 0);
+
+  state.effect.fail = clamp(state.effect.fail + (lost ? 2.4 * dt : -2.4 * dt), 0, 1);
+  state.effect.success = clamp(state.effect.success + (won ? 2.4 * dt : -2.4 * dt), 0, 1);
+  state.history.push({ x: state.ship.x, y: state.ship.y, angle: state.ship.angle, stability: state.ship.stability, heat: state.ship.heat, t: state.elapsed });
+  if (state.history.length > 420) state.history.shift();
+
+  return { won, lost };
+}
+
+function draw(snapshot, state, ctx, viewport) {
+  const { width, height } = viewport;
+  const cx = width * 0.5, cy = height * 0.5;
+  const shakeX = (Math.random() - 0.5) * state.camera.shake;
+  const shakeY = (Math.random() - 0.5) * state.camera.shake;
+  ctx.save();
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#06151e";
+  ctx.fillRect(0, 0, width, height);
+  ctx.translate(cx + shakeX, cy + shakeY);
+  ctx.scale(state.camera.zoom, state.camera.zoom);
+  ctx.translate(-state.camera.x, -state.camera.y);
+  ctx.fillStyle = "rgba(90,190,230,0.18)";
+  ctx.fillRect(-420, -state.challenge.parameters.tunnelHalfHeight, 840, state.challenge.parameters.tunnelHalfHeight * 2);
+  for (const p of state.particles) { ctx.fillStyle = `rgba(120,220,255,${p.life})`; ctx.fillRect(p.x, p.y, 2, 2); }
+  if (state.thrust.active) { ctx.shadowBlur = 16; ctx.shadowColor = "#4dd8ff"; }
+  ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(snapshot.x, snapshot.y, 7, 0, Math.PI * 2); ctx.fill();
+  ctx.shadowBlur = 0; ctx.restore();
+  if (state.effect.fail > 0) { ctx.fillStyle = `rgba(255,30,30,${state.effect.fail * 0.35})`; ctx.fillRect(0,0,width,height); }
+  if (state.effect.success > 0) { ctx.fillStyle = `rgba(255,255,255,${state.effect.success * 0.5})`; ctx.fillRect(0,0,width,height); }
+}
+
+export function render(state, ctx, viewport) { draw(state.ship, state, ctx, viewport); }
+export function renderReplay(state, ctx, viewport, snap) { draw(snap, state, ctx, viewport); }
+
+export function evaluate(state, won) {
+  const speed = Math.hypot(state.ship.vx, state.ship.vy);
+  const dragProxy = speed * state.ship.dragCoeff * state.world.airDensity * 100;
+  const quality = clamp((state.ship.stability + clamp(100 - dragProxy * 1.4, 0, 100)) * 0.5, 0, 100);
+  const xp = Math.round(16 + quality * 0.34 + (won ? 42 : 0));
+  const nova = won ? Math.round(22 + quality * 0.3) : 0;
+  return { won, quality, xp, nova, summary: won ? "Flujo optimizado" : "Túnel inestable" };
+}
