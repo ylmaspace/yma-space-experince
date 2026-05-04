@@ -1,105 +1,85 @@
+/**
+ * YLMA Physics Engine - Core Module
+ * Proporciona las herramientas básicas de cálculo vectorial y dinámica.
+ */
+
+// Utilidades matemáticas básicas
+export const clamp = (val, min, max) => Math.min(Math.max(val, min), max);
+export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
 export class PhysicsWorld {
-  constructor({ gravity = { x: 0, y: 0 }, airDensity = 1.225, dtClamp = 0.05 } = {}) {
+  constructor({ gravity = { x: 0, y: 0 }, airDensity = 0 } = {}) {
     this.gravity = gravity;
     this.airDensity = airDensity;
-    this.dtClamp = dtClamp;
     this.bodies = [];
-    this.time = 0;
   }
 
-  addBody(body) { this.bodies.push(body); return body; }
+  addBody(body) {
+    this.bodies.push(body);
+  }
 
   update(dt) {
-    const step = Math.max(0, Math.min(this.dtClamp, Number(dt) || 0));
-    if (!step) return;
+    for (const body of this.bodies) {
+      if (body.static) continue;
 
-    for (const b of this.bodies) {
-      b.fx = 0; b.fy = 0; b.torque = 0;
-      if (b.static) continue;
-      b.fx += this.gravity.x * b.mass;
-      b.fy += this.gravity.y * b.mass;
-      for (const force of b.forces) force.apply?.(b, this, step);
+      // 1. Aplicar Gravedad Global
+      body.vx += this.gravity.x * dt;
+      body.vy += this.gravity.y * dt;
+
+      // 2. Aplicar Fuerzas externas (como DragForce)
+      for (const force of body.forces) {
+        force.apply(body, this.airDensity, dt);
+      }
+
+      // 3. Actualizar Posición
+      body.x += body.vx * dt;
+      body.y += body.vy * dt;
+      
+      // 4. Actualizar Rotación (Inercia simplificada)
+      body.angle += (body.angularVelocity || 0) * dt;
     }
-
-    for (const b of this.bodies) {
-      if (b.static) continue;
-      b.vx += (b.fx / b.mass) * step;
-      b.vy += (b.fy / b.mass) * step;
-      b.x += b.vx * step;
-      b.y += b.vy * step;
-      b.angularVelocity += (b.torque / b.inertia) * step;
-      b.angle += b.angularVelocity * step;
-    }
-
-    this.time += step;
   }
 }
 
-export function createBody(c = {}) {
+/**
+ * Crea un objeto físico con propiedades base.
+ */
+export function createBody(props) {
   return {
-    id: c.id || null,
-    x: c.x || 0,
-    y: c.y || 0,
-    vx: c.vx || 0,
-    vy: c.vy || 0,
-    angle: c.angle || 0,
-    angularVelocity: c.angularVelocity || 0,
-    mass: Math.max(1e-4, c.mass ?? 1),
-    inertia: Math.max(1e-4, c.inertia ?? 1),
-    area: Math.max(1e-4, c.area ?? 1),
-    dragCoeff: Math.max(0, c.dragCoeff ?? 0.5),
-    static: Boolean(c.static),
-    fx: 0,
-    fy: 0,
-    torque: 0,
-    forces: Array.isArray(c.forces) ? c.forces : [],
+    id: props.id || Math.random(),
+    x: props.x || 0,
+    y: props.y || 0,
+    vx: props.vx || 0,
+    vy: props.vy || 0,
+    mass: props.mass || 1,
+    angle: props.angle || 0,
+    angularVelocity: 0,
+    static: props.static || false,
+    forces: [],
+    ...props
   };
 }
 
-export class GravityForce {
-  constructor(G = 8, epsilon = 0.01) { this.G = G; this.epsilon = epsilon; }
-  apply(body, world) {
-    for (const other of world.bodies) {
-      if (other === body) continue;
-      const dx = other.x - body.x;
-      const dy = other.y - body.y;
-      const d2 = dx * dx + dy * dy + this.epsilon;
-      const d = Math.sqrt(d2);
-      const f = (this.G * body.mass * other.mass) / d2;
-      body.fx += f * (dx / d);
-      body.fy += f * (dy / d);
-    }
-  }
-}
-
+/**
+ * Fuerza de resistencia (Air Drag / Rozamiento)
+ */
 export class DragForce {
-  constructor(mult = 1) { this.mult = mult; }
-  apply(body, world) {
+  constructor(coefficient = 0.47) {
+    this.coeff = coefficient;
+  }
+
+  apply(body, airDensity, dt) {
     const speed = Math.hypot(body.vx, body.vy);
-    if (speed < 1e-4) return;
-    const drag = 0.5 * world.airDensity * speed * speed * body.dragCoeff * body.area * this.mult;
-    body.fx -= drag * (body.vx / speed);
-    body.fy -= drag * (body.vy / speed);
+    if (speed <= 0) return;
+
+    // Fd = 1/2 * rho * v^2 * Cd * A
+    const forceMag = 0.5 * airDensity * (speed * speed) * this.coeff * (body.area || 1);
+    
+    // Aplicar en dirección opuesta al movimiento
+    const unitX = body.vx / speed;
+    const unitY = body.vy / speed;
+
+    body.vx -= (forceMag * unitX / body.mass) * dt;
+    body.vy -= (forceMag * unitY / body.mass) * dt;
   }
 }
-
-export class ThrustForce {
-  constructor(power = 10) { this.power = power; this.active = false; this.throttle = 1; }
-  apply(body) {
-    if (!this.active) return;
-    const p = this.power * Math.max(0, Math.min(1, this.throttle));
-    body.fx += Math.cos(body.angle) * p;
-    body.fy += Math.sin(body.angle) * p;
-  }
-}
-
-export class TorqueForce {
-  constructor(power = 1) { this.power = power; this.direction = 0; }
-  apply(body) { body.torque += this.power * this.direction; }
-}
-
-export const kineticEnergy = (b) => 0.5 * b.mass * (b.vx ** 2 + b.vy ** 2);
-export const distance = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
-export const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-
-
